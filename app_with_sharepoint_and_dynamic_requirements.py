@@ -251,15 +251,25 @@ if ctx:
             else:
                 text = extract_text_from_docx(file_bytes)
 
-            score, keywords_found = score_resume(text)
+            # NEW: experience-aware scorer + min-years filter
+            result = score_resume(text)
+            if enforce_min and result["years"] < float(min_years_required):
+                continue
+
             data.append({
                 "File Name": filename,
-                "Score": score,
-                "Keywords Found": keywords_found
+                "Est. Years": result["years"],
+                "Level (Jr/Mid/Sr)": result["level"],
+                "Experience Source": result["years_source"],
+                "Keyword Score": result["kw_score"],
+                "Experience Score": result["exp_score"],
+                "Total Score": result["total"],
+                "Keywords Found": result["keywords_found"],
             })
 
     df = pd.DataFrame(data)
     if not df.empty:
+        # sort for easy triage
         df = df.sort_values(
             ["Level (Jr/Mid/Sr)", "Est. Years", "Total Score"],
             ascending=[True, False, False]
@@ -279,5 +289,3 @@ if ctx:
             target_folder.upload_file("resume_scores.xlsx", output)
             ctx.execute_query()
             st.success("Excel uploaded to SharePoint!")
-
- 
