@@ -277,14 +277,14 @@ if ctx:
                 "Keywords Found": result["keywords_found"],
             })
 
-    df = pd.DataFrame(data)
+        df = pd.DataFrame(data)
     if not df.empty:
         df = df.sort_values(
             ["Level (Jr/Mid/Sr)", "Est. Years", "Total Score"],
             ascending=[True, False, False]
         ).reset_index(drop=True)
     st.dataframe(df)
-
+    
     if not df.empty:
         output = io.BytesIO()
         df.to_excel(output, index=False)
