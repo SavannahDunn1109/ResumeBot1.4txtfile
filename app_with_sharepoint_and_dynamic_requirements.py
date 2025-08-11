@@ -8,8 +8,44 @@ import os
 from PyPDF2 import PdfReader
 from docx import Document
 import re
-from datetime import datetime, date
+from datetime import date
 
+# ========== CONFIG ==========
+SITE_URL = "https://eleven090.sharepoint.com/sites/Recruiting"
+LIBRARY = "Shared Documents"
+FOLDER = "Active Resumes"
+
+# ========== AUTH ==========
+@st.cache_resource
+def connect_to_sharepoint():
+    ctx_auth = AuthenticationContext(SITE_URL)
+    if not ctx_auth.acquire_token_for_user(
+        st.secrets["sharepoint"]["username"],
+        st.secrets["sharepoint"]["password"]
+    ):
+        st.error("Authentication failed")
+        return None
+    return ClientContext(SITE_URL, ctx_auth)
+
+# ========== FILE HELPERS ==========
+def download_file(ctx, file_url):
+    response = File.open_binary(ctx, file_url)
+    return io.BytesIO(response.content)
+
+def extract_text_from_pdf(file_bytes):
+    text = ""
+    reader = PdfReader(file_bytes)
+    for page in reader.pages:
+        page_text = page.extract_text()
+        if page_text:
+            text += page_text + "\n"
+    return text
+
+def extract_text_from_docx(file_bytes):
+    doc = Document(file_bytes)
+    return "\n".join([para.text for para in doc.paragraphs])
+
+# ========== EXPERIENCE HELPERS ==========
 MONTHS = {
     "jan": 1, "january": 1,
     "feb": 2, "february": 2,
@@ -155,45 +191,7 @@ def classify_level(years: float, jr_max: int, mid_max: int) -> str:
     else:
         return "Senior"
 
-
-# ========== CONFIG ==========
-SITE_URL = "https://eleven090.sharepoint.com/sites/Recruiting"
-LIBRARY = "Shared Documents"
-FOLDER = "Active Resumes"
-
-# ========== AUTH ==========
-@st.cache_resource
-def connect_to_sharepoint():
-    ctx_auth = AuthenticationContext(SITE_URL)
-    if not ctx_auth.acquire_token_for_user(
-        st.secrets["sharepoint"]["username"],
-        st.secrets["sharepoint"]["password"]
-    ):
-        st.error("Authentication failed")
-        return None
-    return ClientContext(SITE_URL, ctx_auth)
-
-# ========== FILE HELPERS ==========
-def download_file(ctx, file_url):
-    response = File.open_binary(ctx, file_url)
-    return io.BytesIO(response.content)
-
-def extract_text_from_pdf(file_bytes):
-    text = ""
-    reader = PdfReader(file_bytes)
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text += page_text + "\n"
-    return text
-
-def extract_text_from_docx(file_bytes):
-    doc = Document(file_bytes)
-    return "\n".join([para.text for para in doc.paragraphs])
-
 # ========== SCORING ==========
-
-# 📄 Upload a custom requirements (.txt) file
 uploaded_req_file = st.file_uploader("📄 Upload Requirements (.txt)", type=["txt"])
 
 KEYWORDS = []
@@ -209,8 +207,7 @@ else:
     st.warning("⚠️ Please upload a requirements .txt file to begin scoring.")
     st.stop()
 
-
-
+# Scoring & filters UI
 st.subheader("⚙️ Scoring & Filters")
 exp_points_per_year = st.number_input("Points per year of experience", min_value=0, max_value=50, value=5, step=1)
 jr_max = st.number_input("Max years for JUNIOR", min_value=0, max_value=10, value=2, step=1)
@@ -218,14 +215,28 @@ mid_max = st.number_input("Max years for MID", min_value=jr_max, max_value=25, v
 enforce_min = st.checkbox("Enforce minimum years of experience filter?", value=False)
 min_years_required = st.number_input("Minimum years (hide resumes below this)", min_value=0, max_value=30, value=3, step=1)
 
-def score_resume(text):
-    score = 0
+def score_resume(text: str):
+    kw_score = 0
     found_keywords = []
+    lower_text = text.lower()
     for kw in KEYWORDS:
-        if kw.lower() in text.lower():
-            score += 10
+        if kw.lower() in lower_text:
+            kw_score += 10
             found_keywords.append(kw)
-    return score, ", ".join(found_keywords)
+
+    years, years_source = estimate_years_experience(text)
+    exp_score = years * exp_points_per_year
+    total = kw_score + exp_score
+
+    return {
+        "years": years,
+        "years_source": years_source,
+        "level": classify_level(years, jr_max, mid_max),
+        "kw_score": kw_score,
+        "exp_score": exp_score,
+        "total": total,
+        "keywords_found": ", ".join(found_keywords),
+    }
 
 # ========== MAIN STREAMLIT APP ==========
 st.title("📄 Resume Scorer from SharePoint")
@@ -251,7 +262,6 @@ if ctx:
             else:
                 text = extract_text_from_docx(file_bytes)
 
-            # NEW: experience-aware scorer + min-years filter
             result = score_resume(text)
             if enforce_min and result["years"] < float(min_years_required):
                 continue
@@ -269,7 +279,6 @@ if ctx:
 
     df = pd.DataFrame(data)
     if not df.empty:
-        # sort for easy triage
         df = df.sort_values(
             ["Level (Jr/Mid/Sr)", "Est. Years", "Total Score"],
             ascending=[True, False, False]
@@ -289,3 +298,4 @@ if ctx:
             target_folder.upload_file("resume_scores.xlsx", output)
             ctx.execute_query()
             st.success("Excel uploaded to SharePoint!")
+success("Excel uploaded to SharePoint!")
