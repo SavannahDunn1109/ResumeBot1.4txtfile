@@ -1,3 +1,4 @@
+import streamlit as st
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.authentication_context import AuthenticationContext
 from office365.sharepoint.files.file import File
@@ -45,18 +46,9 @@ def _present_to_date() -> date:
     return date(today.year, today.month, 15)
 
 def _extract_date_ranges(text: str):
-    """
-    Recognizes:
-      - Jan 2018 - Mar 2021
-      - 2018–2024
-      - February 2020 to Present
-      - 06/2017 - 09/2019
-    Returns merged non-overlapping (start, end) date tuples.
-    """
     t = text.replace("\u2013", "-").replace("\u2014", "-")
     ranges = []
 
-    # Month Year - Month Year (or Present/Current)
     pat_month_year = re.compile(
         r"\b(?P<m1>[A-Za-z]{3,9})\s+(?P<y1>(?:19|20)\d{2})\s*[-to]+\s*(?P<m2>Present|Current|[A-Za-z]{3,9})\s*(?P<y2>(?:19|20)\d{2})?\b",
         flags=re.I
@@ -80,7 +72,6 @@ def _extract_date_ranges(text: str):
             if end > start:
                 ranges.append((start, end))
 
-    # Year - Year (or Present/Current)
     pat_year_year = re.compile(
         r"\b(?P<y1>(?:19|20)\d{2})\s*[-to]+\s*(?P<y2>Present|Current|(?:19|20)\d{2})\b",
         flags=re.I
@@ -90,7 +81,7 @@ def _extract_date_ranges(text: str):
         y2tok = m.group("y2")
         if not y1:
             continue
-        start = _mk_date(y1, 6)  # mid-year if month unknown
+        start = _mk_date(y1, 6)
         if y2tok.lower() in ("present", "current"):
             end = _present_to_date()
         else:
@@ -101,7 +92,6 @@ def _extract_date_ranges(text: str):
         if end > start:
             ranges.append((start, end))
 
-    # mm/yyyy - mm/yyyy (or Present/Current)
     pat_mmyyyy = re.compile(
         r"\b(?P<m1>0?[1-9]|1[0-2])/(?P<y1>(?:19|20)\d{2})\s*[-to]+\s*(?P<m2>0?[1-9]|1[0-2])/(?P<y2>(?:19|20)\d{2}|Present|Current)\b",
         flags=re.I
@@ -124,7 +114,6 @@ def _extract_date_ranges(text: str):
         if end > start:
             ranges.append((start, end))
 
-    # Merge overlaps
     if not ranges:
         return []
     ranges.sort(key=lambda r: r[0])
@@ -154,7 +143,7 @@ def _years_from_phrases(text: str) -> int:
 def estimate_years_experience(text: str):
     yrs_ranges = _years_from_ranges(text)
     yrs_phrases = _years_from_phrases(text)
-    if yrs_ranges >= 0.5:  # ~6 months or more from ranges
+    if yrs_ranges >= 0.5:
         return yrs_ranges, "ranges"
     return float(yrs_phrases), "phrases"
 
@@ -262,29 +251,21 @@ if ctx:
             else:
                 text = extract_text_from_docx(file_bytes)
 
-            result = score_resume(text)
-            if enforce_min and result["years"] < float(min_years_required):
-                continue
-
+            score, keywords_found = score_resume(text)
             data.append({
                 "File Name": filename,
-                "Est. Years": result["years"],
-                "Level (Jr/Mid/Sr)": result["level"],
-                "Experience Source": result["years_source"],
-                "Keyword Score": result["kw_score"],
-                "Experience Score": result["exp_score"],
-                "Total Score": result["total"],
-                "Keywords Found": result["keywords_found"],
+                "Score": score,
+                "Keywords Found": keywords_found
             })
 
-        df = pd.DataFrame(data)
+    df = pd.DataFrame(data)
     if not df.empty:
         df = df.sort_values(
             ["Level (Jr/Mid/Sr)", "Est. Years", "Total Score"],
             ascending=[True, False, False]
         ).reset_index(drop=True)
     st.dataframe(df)
-    
+
     if not df.empty:
         output = io.BytesIO()
         df.to_excel(output, index=False)
